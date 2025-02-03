@@ -1,171 +1,142 @@
-import numpy as np
-import random
 import spacy
+import numpy as np
+from tensorflow.keras.preprocessing.text import Tokenizer
+from tensorflow.keras.preprocessing.sequence import pad_sequences
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense, Embedding, LSTM, Dropout
+from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.callbacks import EarlyStopping
 import json
 import time
+import random
 
 # Carregar modelo NLP para entender frases
 nlp = spacy.load("pt_core_news_lg")
 
-# Frases do usuário (Estados)
-frases_usuario = ["oi", "olá", "bom dia", "boa tarde", "boa noite", 
-                  "como você está?", "tudo bem?", "adeus", "tchau", "até mais"]
+# Carregar perguntas e respostas do arquivo JSON
+def carregar_perguntas_respostas():
+    with open('perguntas_respostas.json', 'r', encoding='utf-8') as file:
+        data = json.load(file)
+    return data["perguntas"], data["respostas"]
 
-# Respostas possíveis do chatbot (Ações)
-respostas = ["Olá! Como posso ajudar?", "Oi, tudo bem?", "Bom dia!", "Boa tarde!", "Boa noite!", 
-             "Estou bem, e você?", "Tudo ótimo!", "Até logo!", "Tchau!", "Nos vemos em breve!"]
+# Carregar perguntas e respostas
+perguntas_usuario, respostas = carregar_perguntas_respostas()
 
-# Criando a Q-Table com valores zerados
-q_table = np.zeros((len(frases_usuario), len(respostas)))
+# Tokenização e padding
+tokenizer = Tokenizer()
+tokenizer.fit_on_texts(perguntas_usuario)
 
-# Parâmetros de aprendizado por reforço
-alpha = 0.1  # Taxa de aprendizado
-gamma = 0.6  # Fator de desconto
-epsilon = 0.1  # Exploração vs Exploração
+X = tokenizer.texts_to_sequences(perguntas_usuario)
+X = pad_sequences(X, padding='post')
 
-# Q-Table para decidir quando iniciar uma conversa
-q_table_iniciar = np.zeros((3, 2))  # Estados: [muito_tempo, moderado, recente] | Ações: [não falar, falar]
+# Respostas em formato numérico
+y = np.array([0, 1, 2, 3, 4, 5])  # Cada resposta é uma classe
 
-# Parâmetros para decisão de iniciar conversa
-taxa_aprendizado = 0.1
-desconto = 0.9
-exploracao = 0.2
+# Definir modelo
+model = Sequential()
+model.add(Embedding(input_dim=len(tokenizer.word_index) + 1, output_dim=64, input_length=X.shape[1]))
+model.add(LSTM(64, return_sequences=False))
+model.add(Dropout(0.5))  # Regularização com Dropout
+model.add(Dense(6, activation='softmax'))  # 6 classes de respostas
 
-# Última interação do usuário
-ultima_interacao = time.time()
+# Compilar modelo
+model.compile(optimizer=Adam(learning_rate=0.001), loss='sparse_categorical_crossentropy', metrics=['accuracy'])
 
-# Banco de dados de preferências (JSON)
-PREFERENCIAS_FILE = "preferencias_usuario.json"
+# Treinamento com early stopping
+early_stopping = EarlyStopping(monitor='loss', patience=5, restore_best_weights=True)
 
-def carregar_preferencias():
-    try:
-        with open(PREFERENCIAS_FILE, "r") as file:
-            return json.load(file)
-    except FileNotFoundError:
-        return {}
+# Treinar o modelo
+model.fit(X, y, epochs=100, batch_size=1, verbose=1, callbacks=[early_stopping])
 
-def salvar_preferencias(preferencias):
-    with open(PREFERENCIAS_FILE, "w") as file:
-        json.dump(preferencias, file)
-
-preferencias_usuario = carregar_preferencias()
-
-def processar_texto(texto):
-    doc = nlp(texto.lower())
-    return " ".join([token.lemma_ for token in doc if not token.is_stop])
-
-def encontrar_estado(entrada):
-    entrada_processada = processar_texto(entrada)
-    similaridades = [nlp(entrada_processada).similarity(nlp(processar_texto(frase))) for frase in frases_usuario]
-    estado = np.argmax(similaridades)
-    return estado, max(similaridades)
-
-def escolher_resposta(estado):
-    if random.uniform(0, 1) < epsilon:
-        return random.randint(0, len(respostas) - 1)
-    return np.argmax(q_table[estado])
-
-def treinar_chatbot(episodios=100000):
-    for _ in range(episodios):
-        estado = random.randint(0, len(frases_usuario) - 1)
-        acao = escolher_resposta(estado)
-        recompensa = 5 if respostas[acao] in [respostas[estado], respostas[estado - 1]] else -3
-        q_table[estado, acao] = (1 - alpha) * q_table[estado, acao] + alpha * (recompensa + gamma * np.max(q_table[estado]))
-
-# Treinar antes de rodar
-treinar_chatbot()
-
-def detectar_preferencia(entrada):
-    palavras = entrada.lower().split()
-    if "gosto de" in entrada or "eu amo" in entrada or "prefiro" in entrada:
-        item = entrada.split("de ")[-1] if "de " in entrada else entrada.split("amo ")[-1]
-        
-        # Carregar as preferências existentes antes de modificar
-        preferencias_usuario = carregar_preferencias()
-
-        # Adicionar o novo gosto sem sobrescrever os antigos
-        preferencias_usuario[item] = True
-        salvar_preferencias(preferencias_usuario)
-
-        return f"Legal! Vou lembrar que você gosta de {item}."
-    return None
-
-# 🚀 NOVA FUNÇÃO: Determinar estado baseado no tempo da última interação
-def obter_estado_tempo():
-    tempo_passado = time.time() - ultima_interacao
-    if tempo_passado > 120:
-        return 0  # muito_tempo_sem_falar
-    elif tempo_passado > 60:
-        return 1  # moderado_tempo
-    return 2  # recente
-
-# 🚀 NOVA FUNÇÃO: Escolher se o bot deve iniciar uma conversa
-def bot_deve_falar():
-    estado_tempo = obter_estado_tempo()
-    if random.uniform(0, 1) < exploracao:
-        return random.choice([0, 1])
-    return np.argmax(q_table_iniciar[estado_tempo])
-
-# 🚀 NOVA FUNÇÃO: Aprendizado por reforço para decidir quando falar
-def atualizar_q_table_iniciar(recompensa):
-    estado_tempo = obter_estado_tempo()
-    acao = bot_deve_falar()
-    proximo_estado = obter_estado_tempo()
-    q_table_iniciar[estado_tempo, acao] = q_table_iniciar[estado_tempo, acao] + taxa_aprendizado * (
-        recompensa + desconto * np.max(q_table_iniciar[proximo_estado]) - q_table_iniciar[estado_tempo, acao]
-    )
-
-# 🚀 NOVA FUNÇÃO: Bot inicia conversa se achar necessário
-def iniciar_conversa():
-    global ultima_interacao
-    if bot_deve_falar() == 1:
-        print("\nChatbot: Oi! Quer conversar?")
-        resposta = input("Você: ").strip().lower()
-        ultima_interacao = time.time()
-        
-        if resposta in ["sim", "claro", "vamos conversar", "quero falar"]:
-            atualizar_q_table_iniciar(1)  # Recompensa positiva
-        elif resposta in ["não", "agora não", "sai", "mais tarde"]:
-            atualizar_q_table_iniciar(-1)  # Penalidade
-        else:
-            atualizar_q_table_iniciar(0)  # Neutro
-
-# 🚀 🚀 Chatbot interativo que agora decide quando falar!
-def chatbot():
-    global ultima_interacao
-
-    print("Chatbot: Olá! Como posso ajudar? (Digite 'sair' para encerrar)")
+# Função de resposta do modelo
+def responder_pergunta(pergunta):
+    pergunta_seq = tokenizer.texts_to_sequences([pergunta])
+    pergunta_pad = pad_sequences(pergunta_seq, padding='post', maxlen=X.shape[1])
     
-    while True:
-        iniciar_conversa()  # O bot pode tentar iniciar uma conversa
-        entrada = input("Você: ").strip().lower()
-        
-        if entrada == "sair":
-            print("Chatbot: Até logo!")
-            break
-        
-        ultima_interacao = time.time()  # Atualiza tempo da última interação
-        
-        # Verificar se o usuário menciona algo que gosta
-        resposta_preferencia = detectar_preferencia(entrada)
-        if resposta_preferencia:
-            print("Chatbot:", resposta_preferencia)
-            continue
-        
-        # Buscar estado na Q-Table
-        estado, confianca = encontrar_estado(entrada)
+    predicao = model.predict(pergunta_pad)
+    resposta_idx = np.argmax(predicao)  # Pegando o índice da maior probabilidade
+    return respostas[resposta_idx]
 
-        if confianca > 0.5:
-            melhor_acao = np.argmax(q_table[estado])
-            resposta = respostas[melhor_acao]
+# Função para iniciar uma conversa por conta própria
+def iniciar_conversa_propria():
+    saudacoes = [
+        "Oi, tudo bem? Como posso ajudar você?",
+        "Olá! Em que posso ser útil hoje?",
+        "Oi! Estou aqui para conversar. O que você gostaria de saber?",
+        "Olá! Posso te ajudar com alguma coisa?"
+    ]
+    print(random.choice(saudacoes))
+    time.sleep(1)  # Pausa para dar tempo ao usuário de processar a saudação inicial
 
-            # Personalizar resposta se o chatbot souber dos gostos do usuário
-            if any(palavra in entrada for palavra in preferencias_usuario):
-                resposta += f" Ah, e eu lembro que você gosta de {', '.join(preferencias_usuario.keys())}! 😉"
+# Função para salvar os gostos em um arquivo JSON
+def salvar_gostos(gostos):
+    try:
+        with open('gostos.json', 'r+', encoding='utf-8') as file:
+            data = json.load(file)
+            data["gostos"].extend(gostos)  # Adiciona novos gostos
+            file.seek(0)
+            json.dump(data, file, ensure_ascii=False, indent=4)
+    except FileNotFoundError:
+        with open('gostos.json', 'w', encoding='utf-8') as file:
+            json.dump({"gostos": gostos}, file, ensure_ascii=False, indent=4)
 
-            print("Chatbot:", resposta)
+# Função para carregar gostos de um arquivo JSON
+def carregar_gostos():
+    try:
+        with open('gostos.json', 'r', encoding='utf-8') as file:
+            data = json.load(file)
+            return data["gostos"]
+    except FileNotFoundError:
+        return []
+
+# Função para perguntar sobre gostos caso o usuário não tenha dito ainda
+def perguntar_sobre_gostos(gostos):
+    if not gostos:  # Se a lista de gostos estiver vazia
+        print("Bot: Eu ainda não sei o que você gosta. Me conte, o que você gosta?")
+        novo_gosto = input("Você: ")
+        gostos.append(novo_gosto)
+        salvar_gostos([novo_gosto])
+        print(f"Bot: Agora você gosta de {novo_gosto}!")
+        
+# Função para identificar e salvar o novo gosto
+def identificar_e_salvar_gosto(frase, gostos):
+    if "gosto de" in frase.lower():  # Verifica se a frase contém "gosto de"
+        novo_gosto = frase.lower().replace("gosto de", "").strip()  # Extrai o gosto
+        novo_gosto = novo_gosto.replace("eu", "").strip()  # Remover a palavra "eu" se ela existir
+        if novo_gosto and novo_gosto not in gostos:  # Evitar adicionar gostos duplicados e verificar se não está vazio
+            gostos.append(novo_gosto)
+            salvar_gostos([novo_gosto])  # Salva o gosto no arquivo JSON
+            print(f"Bot: Agora você gosta de {novo_gosto}!")
+        elif novo_gosto in gostos:
+            print(f"Bot: Você já disse que gosta de {novo_gosto}.")
         else:
-            print("Chatbot: Desculpe, não entendi.")
+            print("Bot: Não consegui entender. Você pode tentar novamente?")
+    else:
+        print("Bot: Eu não entendi muito bem. Você pode dizer o que mais gosta?")
 
-# Iniciar chatbot
-chatbot()
+# Função para interagir com o usuário
+def interagir_com_usuario():
+    iniciar_conversa_propria()  # O bot inicia a conversa automaticamente
+    
+    gostos = carregar_gostos()  # Carregar gostos registrados
+
+    # Perguntar sobre gostos se ainda não foi dito
+    perguntar_sobre_gostos(gostos)
+
+    while True:
+        pergunta = input("Você: ")
+        if pergunta.lower() == 'sair':
+            print("Até logo!")
+            break
+
+        if 'gosta' in pergunta.lower() or 'gostar' in pergunta.lower():  # Pergunta sobre gostos
+            resposta = f"Você gosta de: {', '.join(gostos)}."
+            print(f"Bot: {resposta}")
+        elif 'gosto de' in pergunta.lower():  # Se o usuário disser "gosto de algo"
+            identificar_e_salvar_gosto(pergunta, gostos)
+        else:
+            resposta = responder_pergunta(pergunta)
+            print(f"Bot: {resposta}")
+
+# Iniciar interação
+interagir_com_usuario()
