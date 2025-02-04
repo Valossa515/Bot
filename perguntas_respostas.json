@@ -1,0 +1,19 @@
+{
+    "perguntas": [
+      "oi",
+      "como você está?",
+      "qual seu nome?",
+      "o que você faz?",
+      "você gosta de música?",
+      "vamos conversar?"
+    ],
+    "respostas": [
+      "Olá! Como posso ajudar?",
+      "Estou bem, e você?",
+      "Meu nome é Bot, sou um assistente virtual.",
+      "Eu sou um assistente virtual, posso te ajudar com várias coisas.",
+      "Sim, eu gosto de música! E você?",
+      "Claro, vamos conversar!"
+    ]
+  }
+  
