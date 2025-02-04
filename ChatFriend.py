@@ -10,6 +10,7 @@ import json
 import time
 import random
 import threading
+import requests
 
 nlp = spacy.load("pt_core_news_lg")
 
@@ -101,6 +102,43 @@ def listar_gostos(gostos):
     else:
         print("Bot: Ainda não sei do que você gosta. Me conte algo!")
 
+def escolher_fonte(termo):
+  termo = termo.lower()
+
+  fontes = {
+      "wikipedia": ["o que é", "quem foi", "história de", "sobre", "definição de"],
+      "google": ["notícia", "últimas novidades", "artigo sobre", "como fazer"],
+      "bing": ["onde fica", "mapa de", "previsão do tempo"],
+      "openai": ["explicação técnica", "como funciona", "exemplo de código"]
+  }
+
+  for fonte, palavras_chave in fontes.items():
+    if any(palavra in termo for palavra in palavras_chave):
+      return fonte
+  return "wikipedia"
+
+def pesquisar_na_web(termo):
+  fonte = escolher_fonte(termo)
+  if fonte == "wikipedia":
+        url = f"https://pt.wikipedia.org/api/rest_v1/page/summary/{termo.replace(' ', '_')}"
+  elif fonte == "google":
+        url = f"https://www.googleapis.com/customsearch/v1?q={termo}&key=SUA_CHAVE_API&cx=SEU_CX_ID"
+  elif fonte == "bing":
+        url = f"https://api.bing.microsoft.com/v7.0/search?q={termo}"
+  elif fonte == "openai":
+        return "Sou um bot básico, ainda não posso acessar a OpenAI, mas posso te ajudar com explicações!"
+  
+  response = requests.get(url)
+  if response.status_code == 200:
+    data = response.json()
+    if fonte == "wikipedia":
+       return data.get("extract", "Não encontrei nada sobre isso.")
+    elif fonte == "google":
+       return data["items"][0]["snippet"] if "items" in data else "Nada encontrado no Google."
+    elif fonte == "bing":
+       return data["webPages"]["value"][0]["snippet"] if "webPages" in data else "Nada encontrado no Bing."
+  return "Não consegui encontrar informações sobre isso."
+  
 # Controle de tempo de inatividade
 class MonitorInatividade(threading.Thread):
     def __init__(self):
@@ -155,6 +193,10 @@ def interagir_com_usuario():
             print(f"Bot: {resposta}")
         elif 'gosto de' in pergunta:
             identificar_e_salvar_gosto(pergunta, gostos)
+        elif "pesquisar sobre" in pergunta or "o que é" in pergunta:
+            termo = pergunta.replace("pesquisar sobre", "").replace("o que é", "").strip()
+            resposta = pesquisar_na_web(termo)
+            print(f"Bot: {resposta}")
         else:
             resposta = responder_pergunta(pergunta)
             print(f"Bot: {resposta}")
